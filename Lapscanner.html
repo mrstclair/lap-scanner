@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lap Scanner</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; background: #0f172a; color: #e2e8f0; }
+  h2 { margin: 4px 0 12px; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  select, input, button { font-size: 16px; padding: 8px; border-radius: 8px; border: 1px solid #334155;
+    background: #1e293b; color: #e2e8f0; }
+  button { background: #2563eb; border-color: #2563eb; font-weight: 600; cursor: pointer; }
+  button.secondary { background: #334155; border-color: #334155; }
+  #reader { width: 100%; max-width: 420px; margin: 0 auto; border-radius: 12px; overflow: hidden; }
+  #manual { display: flex; gap: 8px; margin: 10px 0; }
+  #manual input { flex: 1; }
+  #feedback { min-height: 92px; margin-top: 12px; padding: 16px; border-radius: 12px;
+    text-align: center; font-size: 22px; font-weight: 700; transition: background .2s; }
+  .ok { background: #16a34a; color: #fff; }
+  .err { background: #dc2626; color: #fff; }
+  .warn { background: #d97706; color: #fff; }
+  .sub { font-size: 15px; font-weight: 500; opacity: .95; margin-top: 4px; }
+</style>
+</head>
+<body>
+<h2>🏃 Lap Scanner</h2>
+
+<div class="controls">
+  <select id="location"></select>
+  <input id="lapLen" type="number" style="width:110px" title="Lap length (m)">
+  <input id="device" placeholder="Station label" style="width:120px">
+  <button class="secondary" id="camBtn" onclick="toggleCam()">📷 Start camera</button>
+</div>
+
+<div id="reader"></div>
+
+<div id="manual">
+  <input id="manualId" placeholder="Scan badge here (or type ID) and it logs" autocomplete="off" autofocus>
+  <button onclick="submitManual()">Log</button>
+</div>
+
+<div id="feedback">Loading…</div>
+
+<script src="https://unpkg.com/html5-qrcode"></script>
+<script>
+// ====== FILL THESE IN ======
+const EXEC_URL = 'PASTE_YOUR_EXEC_URL_HERE';   // ends in /exec
+const TOKEN    = 'PASTE_YOUR_SCANTOKEN_HERE';   // 8-char value from Config
+// ============================
+
+let scanner = null, camOn = false, cfgLoaded = false;
+
+// Bootstrap config from the web app (locations + default lap length)
+fetch(EXEC_URL + '?bootstrap=1')
+  .then(r => r.json())
+  .then(cfg => {
+    const loc = document.getElementById('location');
+    (cfg.locations || ['Track']).forEach(l => { const o = document.createElement('option'); o.value = o.text = l; loc.add(o); });
+    document.getElementById('lapLen').value = cfg.defaultLapLengthM || 400;
+    cfgLoaded = true;
+    setFeedback('', 'Ready to scan');
+  })
+  .catch(() => { // fall back to defaults if bootstrap blocked
+    const loc = document.getElementById('location');
+    ['Track','Gym','Hall','Playground'].forEach(l => { const o = document.createElement('option'); o.value = o.text = l; loc.add(o); });
+    document.getElementById('lapLen').value = 400;
+    setFeedback('', 'Ready to scan');
+  });
+
+const mi = document.getElementById('manualId');
+mi.addEventListener('keydown', e => { if (e.key === 'Enter') submitManual(); });
+function submitManual() { const v = mi.value.trim(); if (!v) return; mi.value = ''; send(v); }
+
+let lastCode = '', lastTime = 0;
+function onScan(txt) {
+  const now = Date.now();
+  if (txt === lastCode && now - lastTime < 2500) return;
+  lastCode = txt; lastTime = now;
+  send(txt.trim());
+}
+
+function send(id) {
+  const payload = {
+    token: TOKEN, studentId: id,
+    location: document.getElementById('location').value,
+    lapLengthM: Number(document.getElementById('lapLen').value),
+    deviceLabel: document.getElementById('device').value
+  };
+  // text/plain avoids a CORS preflight that Apps Script can't answer
+  fetch(EXEC_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload)
+  })
+  .then(r => r.json())
+  .then(showResult)
+  .catch(e => setFeedback('err', 'Network error', String(e)));
+}
+
+function showResult(r) {
+  if (r.ok) setFeedback('ok', '✔ ' + r.name, 'Gr ' + r.grade + ' · ' + r.todayLaps + ' laps today');
+  else if (r.cooldown) setFeedback('warn', r.name || 'Wait', r.msg);
+  else setFeedback('err', '✖ ' + r.msg);
+}
+
+function setFeedback(cls, main, sub) {
+  const f = document.getElementById('feedback');
+  f.className = cls;
+  f.innerHTML = main + (sub ? '<div class="sub">' + sub + '</div>' : '');
+  if (cls && navigator.vibrate) navigator.vibrate(cls === 'ok' ? 60 : 150);
+  if (cls) setTimeout(() => { f.className = ''; f.textContent = 'Ready to scan'; }, 2200);
+  mi.focus();
+}
+
+async function toggleCam() {
+  const btn = document.getElementById('camBtn');
+  if (camOn) { scanner.stop().then(() => { camOn = false; btn.textContent = '📷 Start camera'; }); return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setFeedback('err', 'Camera unsupported', 'Use a USB/Bluetooth scanner or manual entry.');
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+  } catch (err) {
+    const map = {
+      NotAllowedError: 'Permission denied — click the camera icon in the address bar → Allow, then reload.',
+      NotFoundError: 'No camera found on this device.',
+      NotReadableError: 'Camera is in use by another app.'
+    };
+    setFeedback('err', 'Camera: ' + err.name, map[err.name] || err.message);
+    return;
+  }
+  stream.getTracks().forEach(t => t.stop());
+  scanner = scanner || new Html5Qrcode('reader');
+  scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: 250 }, onScan, () => {})
+    .then(() => { camOn = true; btn.textContent = '⏹ Stop camera'; })
+    .catch(e => setFeedback('err', 'Camera start failed', String(e)));
+}
+</script>
+</body>
+</html>
