@@ -1,41 +1,33 @@
 <!DOCTYPE html>
 <html>
 <head>
-<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lap Scanner</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; background: #0f172a; color: #e2e8f0; }
   h2 { margin: 4px 0 12px; }
-  .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
   .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
   select, input, button { font-size: 16px; padding: 8px; border-radius: 8px; border: 1px solid #334155;
     background: #1e293b; color: #e2e8f0; }
   button { background: #2563eb; border-color: #2563eb; font-weight: 600; cursor: pointer; }
   button.secondary { background: #334155; border-color: #334155; }
-  button.manage { background: #7c3aed; border-color: #7c3aed; }
-  button:disabled { opacity: .5; cursor: not-allowed; }
   #reader { width: 100%; max-width: 420px; margin: 0 auto; border-radius: 12px; overflow: hidden; }
   #manual { display: flex; gap: 8px; margin: 10px 0; }
-  #manual input { flex: 1; font-size: 18px; }
+  #manual input { flex: 1; }
   #feedback { min-height: 92px; margin-top: 12px; padding: 16px; border-radius: 12px;
     text-align: center; font-size: 22px; font-weight: 700; transition: background .2s; }
   .ok { background: #16a34a; color: #fff; }
   .err { background: #dc2626; color: #fff; }
   .warn { background: #d97706; color: #fff; }
   .sub { font-size: 15px; font-weight: 500; opacity: .95; margin-top: 4px; }
-  a.reports { color: #93c5fd; font-size: 14px; }
-  .notice { padding: 12px; border-radius: 8px; margin-bottom: 10px; font-size: 14px; }
-  #info { background: #1e293b; border: 1px solid #334155; color: #cbd5e1; display: none; }
-  #info strong { color: #e2e8f0; }
+  #log { margin-top: 12px; font-size: 12px; font-family: monospace; color: #94a3b8;
+    background: #1e293b; border-radius: 8px; padding: 8px; max-height: 160px; overflow-y: auto; white-space: pre-wrap; }
 </style>
 </head>
 <body>
-<div class="topbar">
-  <h2>🏃 Lap Tracker</h2>
-  <button class="manage" onclick="openManage()">⚙ Teacher Management</button>
-</div>
-
-<div id="info" class="notice"></div>
+<h2>🏃 Lap Scanner</h2>
 
 <div class="controls">
   <select id="location"></select>
@@ -51,46 +43,44 @@
   <button onclick="submitManual()">Log</button>
 </div>
 
-<div id="feedback">Ready to scan</div>
-<p><a class="reports" href="#" onclick="showReports(event)">View reports ▾</a></p>
-<div id="reports"></div>
+<div id="feedback">Loading…</div>
+<div id="log"></div>
 
 <script src="https://unpkg.com/html5-qrcode"></script>
 <script>
-let CFG = null, scanner = null, camOn = false, APPURL = '';
-const embedded = (window.self !== window.top);
+// ====== YOUR SETTINGS (already filled in) ======
+const EXEC_URL = 'https://script.google.com/macros/s/AKfycbyjMF7jZ7tc8d77Q7_SsP7clwpZXJ6t41Qw6UIDE5RU_5OJFStP82tj-Ydzxpb_8f0xeA/exec';
+const TOKEN    = 'f362693a';
+// ===============================================
 
-google.script.run.withSuccessHandler(u => APPURL = u).getWebAppUrl();
+let scanner = null, camOn = false;
 
-google.script.run.withSuccessHandler(cfg => {
-  CFG = cfg;
-  const loc = document.getElementById('location');
-  cfg.locations.forEach(l => { const o = document.createElement('option'); o.value = o.text = l; loc.add(o); });
-  document.getElementById('lapLen').value = cfg.defaultLapLengthM;
-}).getConfig();
-
-// In the Apps Script iframe the webcam cannot be granted — say so once, no loop.
-if (embedded) {
-  const info = document.getElementById('info');
-  info.style.display = 'block';
-  info.innerHTML = '<strong>Webcam scanning isn’t available in this embedded view</strong> ' +
-    '(Google blocks camera access inside Apps Script frames — no setting on this page can change it). ' +
-    'Use a <strong>USB or Bluetooth barcode scanner</strong> — just scan a badge into the box below and it logs instantly. ' +
-    'Typing an ID and pressing Enter works too.';
-  const btn = document.getElementById('camBtn');
-  btn.disabled = true;
-  btn.title = 'Camera is blocked inside the embedded view';
+function logLine(msg) {
+  const el = document.getElementById('log');
+  const t = new Date().toLocaleTimeString();
+  el.textContent = '[' + t + '] ' + msg + '\n' + el.textContent;
 }
-function openManage() { if (APPURL) window.open(APPURL + '?page=manage', '_blank'); }
+
+fetch(EXEC_URL + '?bootstrap=1')
+  .then(r => r.json())
+  .then(cfg => {
+    const loc = document.getElementById('location');
+    (cfg.locations || ['Track']).forEach(l => { const o = document.createElement('option'); o.value = o.text = l; loc.add(o); });
+    document.getElementById('lapLen').value = cfg.defaultLapLengthM || 400;
+    setFeedback('', 'Ready to scan');
+    logLine('Bootstrap OK.');
+    if (cfg.token && cfg.token !== TOKEN) logLine('⚠ TOKEN MISMATCH — server token differs from this file.');
+  })
+  .catch(e => {
+    const loc = document.getElementById('location');
+    ['Track','Gym','Hall','Playground'].forEach(l => { const o = document.createElement('option'); o.value = o.text = l; loc.add(o); });
+    document.getElementById('lapLen').value = 400;
+    setFeedback('', 'Ready to scan');
+    logLine('Bootstrap fetch failed: ' + e);
+  });
 
 const mi = document.getElementById('manualId');
 mi.addEventListener('keydown', e => { if (e.key === 'Enter') submitManual(); });
-
-function payloadBase(id) {
-  return { studentId: id, location: document.getElementById('location').value,
-    lapLengthM: Number(document.getElementById('lapLen').value),
-    deviceLabel: document.getElementById('device').value };
-}
 function submitManual() { const v = mi.value.trim(); if (!v) return; mi.value = ''; send(v); }
 
 let lastCode = '', lastTime = 0;
@@ -98,24 +88,47 @@ function onScan(txt) {
   const now = Date.now();
   if (txt === lastCode && now - lastTime < 2500) return;
   lastCode = txt; lastTime = now;
+  logLine('Decoded QR → ' + txt);
   send(txt.trim());
 }
+function onScanError() { /* per-frame decode misses are normal; ignore */ }
+
 function send(id) {
-  google.script.run.withSuccessHandler(showResult)
-    .withFailureHandler(e => paint('err', 'Error: ' + e.message))
-    .recordScan(payloadBase(id));
+  const payload = {
+    token: TOKEN, studentId: id,
+    location: document.getElementById('location').value,
+    lapLengthM: Number(document.getElementById('lapLen').value),
+    deviceLabel: document.getElementById('device').value
+  };
+  logLine('POST → ' + id);
+  fetch(EXEC_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload)
+  })
+  .then(r => r.text())
+  .then(text => {
+    let r;
+    try { r = JSON.parse(text); }
+    catch (e) { logLine('Server returned non-JSON: ' + text.slice(0,120)); setFeedback('err', 'Server error', 'See log below'); return; }
+    logLine('Response: ' + JSON.stringify(r));
+    showResult(r);
+  })
+  .catch(e => { logLine('Network error: ' + e); setFeedback('err', 'Network error', String(e)); });
 }
+
 function showResult(r) {
-  if (r.ok) paint('ok', '✔ ' + r.name, 'Gr ' + r.grade + ' · ' + r.todayLaps + ' laps today');
-  else if (r.cooldown) paint('warn', r.name || 'Wait', r.msg);
-  else paint('err', '✖ ' + r.msg);
+  if (r.ok) setFeedback('ok', '✔ ' + r.name, 'Gr ' + r.grade + ' · ' + r.todayLaps + ' laps today');
+  else if (r.cooldown) setFeedback('warn', r.name || 'Wait', r.msg);
+  else setFeedback('err', '✖ ' + r.msg);
 }
-function paint(cls, main, sub) {
+
+function setFeedback(cls, main, sub) {
   const f = document.getElementById('feedback');
   f.className = cls;
   f.innerHTML = main + (sub ? '<div class="sub">' + sub + '</div>' : '');
-  if (navigator.vibrate) navigator.vibrate(cls === 'ok' ? 60 : 150);
-  setTimeout(() => { f.className = ''; f.textContent = 'Ready to scan'; }, 2200);
+  if (cls && navigator.vibrate) navigator.vibrate(cls === 'ok' ? 60 : 150);
+  if (cls) setTimeout(() => { f.className = ''; f.textContent = 'Ready to scan'; }, 2600);
   mi.focus();
 }
 
@@ -123,47 +136,22 @@ async function toggleCam() {
   const btn = document.getElementById('camBtn');
   if (camOn) { scanner.stop().then(() => { camOn = false; btn.textContent = '📷 Start camera'; }); return; }
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    paint('err', 'Camera unsupported', 'Use a USB/Bluetooth scanner or manual entry.');
+    setFeedback('err', 'Camera unsupported', 'Use a USB/Bluetooth scanner or manual entry.');
     return;
   }
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
   } catch (err) {
-    paint('err', 'Camera: ' + err.name, 'Use a USB/Bluetooth scanner or manual entry instead.');
+    setFeedback('err', 'Camera: ' + err.name, err.message);
+    logLine('Camera error: ' + err.name);
     return;
   }
   stream.getTracks().forEach(t => t.stop());
   scanner = scanner || new Html5Qrcode('reader');
-  scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: 250 }, onScan, () => {})
-    .then(() => { camOn = true; btn.textContent = '⏹ Stop camera'; })
-    .catch(e => paint('err', 'Camera start failed', String(e)));
-}
-
-function showReports(ev) {
-  ev.preventDefault();
-  google.script.run.withSuccessHandler(renderReports).getLeaderboard('today');
-}
-function renderReports(rows) {
-  let h = '<div class="controls"><select id="win" onchange="reload()">' +
-    ['today','week','month','year','all'].map(w => `<option value="${w}">${w}</option>`).join('') +
-    '</select></div><table style="width:100%;border-collapse:collapse;font-size:14px">' +
-    '<tr><th align="left">#</th><th align="left">Name</th><th>Gr</th><th>Laps</th><th>Dist</th></tr>';
-  rows.forEach((r, i) => {
-    h += `<tr><td>${i+1}</td><td>${r.name}</td><td align="center">${r.grade}</td>` +
-      `<td align="center">${r.laps}</td><td align="center">${(r.distanceM/1000).toFixed(2)} km</td></tr>`;
-  });
-  document.getElementById('reports').innerHTML = h + '</table>';
-}
-function reload() {
-  google.script.run.withSuccessHandler(rows => {
-    let h = '<tr><th align="left">#</th><th align="left">Name</th><th>Gr</th><th>Laps</th><th>Dist</th></tr>';
-    rows.forEach((r, i) => {
-      h += `<tr><td>${i+1}</td><td>${r.name}</td><td align="center">${r.grade}</td>` +
-        `<td align="center">${r.laps}</td><td align="center">${(r.distanceM/1000).toFixed(2)} km</td></tr>`;
-    });
-    document.querySelector('#reports table').innerHTML = h;
-  }).getLeaderboard(document.getElementById('win').value);
+  scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: 250 }, onScan, onScanError)
+    .then(() => { camOn = true; btn.textContent = '⏹ Stop camera'; logLine('Camera started.'); })
+    .catch(e => { setFeedback('err', 'Camera start failed', String(e)); logLine('Start failed: ' + e); });
 }
 </script>
 </body>
