@@ -128,7 +128,6 @@ async function toggleCam(){
   if(camOn){scanner.stop().then(()=>{camOn=false;btn.textContent='📷 Start camera';});return;}
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){setFeedback('err','Camera unsupported','Use the main page manual box.');return;}
 
-  // Try rear camera first, fall back to any available camera (laptops have only front)
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
