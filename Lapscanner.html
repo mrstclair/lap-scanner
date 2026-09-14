@@ -1,3 +1,127 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tiger Camera Scanner</title>
+<style>
+  :root { --purple-dk:#7c3aed; --yellow:#f6c445; --ink:#16121f; --panel:#221a33; --panel2:#2d2340;
+    --line:#3d3155; --text:#f4f1fa; --muted:#a99fc4; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; margin: 0; background: var(--ink); color: var(--text);
+    background-image: repeating-linear-gradient(115deg, transparent 0 38px, rgba(246,196,69,.03) 38px 42px); }
+  .bar { display:flex; align-items:center; justify-content:space-between; padding:14px 18px;
+    background: linear-gradient(90deg, var(--purple-dk), var(--panel)); border-bottom:3px solid var(--yellow); }
+  .bar h2 { margin:0; font-size:20px; }
+  .b-back { background: var(--yellow); color: var(--ink); border:1px solid var(--yellow);
+    font-weight:700; padding:10px 14px; border-radius:10px; cursor:pointer; font-size:15px; }
+  .wrap { padding:16px; max-width:520px; margin:0 auto; }
+  .controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+  select, input, button { font-size:16px; padding:9px; border-radius:8px; border:1px solid var(--line);
+    background: var(--panel2); color: var(--text); }
+  button.go { background: var(--purple-dk); border-color: var(--purple-dk); font-weight:700; cursor:pointer; }
+  label.dist { display:flex; align-items:center; gap:4px; font-size:13px; color:var(--muted); }
+  #reader { width:100%; border-radius:12px; overflow:hidden; }
+  #feedback { min-height:96px; margin-top:14px; padding:18px; border-radius:14px; text-align:center;
+    font-size:26px; font-weight:800; }
+  .ok { background:#16a34a; color:#fff; } .err { background:#dc2626; color:#fff; } .warn { background:#d97706; color:#fff; }
+  .sub { font-size:16px; font-weight:600; opacity:.95; margin-top:4px; }
+  #savedNote { font-size:12px; color:var(--yellow); min-height:16px; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <h2>🐯 Camera Scanner</h2>
+  <button class="b-back" onclick="goMain()">← Back to main</button>
+</div>
+
+<div class="wrap">
+  <div class="controls">
+    <select id="location" onchange="locationChanged()"></select>
+    <label class="dist">Dist/lap:
+      <input id="lapVal" type="number" step="any" style="width:80px" onchange="saveDistance()">
+      <select id="unit" style="width:74px" onchange="unitChanged()">
+        <option value="m">meters</option><option value="mi">miles</option>
+      </select>
+    </label>
+    <label class="dist"><input type="checkbox" id="soundOn" checked> 🔊</label>
+    <button class="go" id="camBtn" onclick="toggleCam()">📷 Start camera</button>
+  </div>
+  <div id="savedNote"></div>
+  <div id="reader"></div>
+  <div id="feedback">Loading…</div>
+</div>
+
+<script src="https://unpkg.com/html5-qrcode"></script>
+<script>
+// ====== YOUR SETTINGS ======
+const EXEC_URL = 'https://script.google.com/macros/s/AKfycbyjMF7jZ7tc8d77Q7_SsP7clwpZXJ6t41Qw6UIDE5RU_5OJFStP82tj-Ydzxpb_8f0xeA/exec';
+const TOKEN    = 'f362693a';
+// ===========================
+
+const M_PER_MILE = 1609.344;
+let scanner=null, camOn=false, LOC_LAPS={}, DEFAULT_M=400, MAIN_URL='';
+
+function goMain() { window.location.href = MAIN_URL || EXEC_URL; }
+
+let audioCtx=null;
+function ensureAudio(){ if(!audioCtx){try{audioCtx=new (window.AudioContext||window.webkitAudioContext)();}catch(e){}} if(audioCtx&&audioCtx.state==='suspended')audioCtx.resume(); }
+function beep(kind){
+  if(!document.getElementById('soundOn').checked||!audioCtx) return;
+  const now=audioCtx.currentTime;
+  function tone(f,s,d,v){const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.type='sine';o.frequency.value=f;o.connect(g);g.connect(audioCtx.destination);g.gain.setValueAtTime(0,now+s);g.gain.linearRampToValueAtTime(v,now+s+0.01);g.gain.exponentialRampToValueAtTime(0.0001,now+s+d);o.start(now+s);o.stop(now+s+d);}
+  if(kind==='ok'){tone(880,0,0.12,0.3);tone(1320,0.10,0.15,0.3);}
+  else if(kind==='warn'){tone(300,0,0.25,0.25);}
+  else{tone(200,0,0.18,0.3);tone(160,0.16,0.22,0.3);}
+}
+
+fetch(EXEC_URL + '?bootstrap=1').then(r=>r.json()).then(cfg=>{
+  MAIN_URL = cfg.execUrl || EXEC_URL;
+  LOC_LAPS = cfg.locationLaps || {}; DEFAULT_M = cfg.defaultLapLengthM || 400;
+  const loc=document.getElementById('location');
+  (cfg.locations||['Track']).forEach(l=>{const o=document.createElement('option');o.value=o.text=l;loc.add(o);});
+  locationChanged(); setFeedback('','Ready to scan');
+}).catch(()=>{
+  const loc=document.getElementById('location');
+  ['Track','Gym','Hall','Playground'].forEach(l=>{const o=document.createElement('option');o.value=o.text=l;loc.add(o);});
+  locationChanged(); setFeedback('','Ready to scan');
+});
+
+function currentMeters(){const loc=document.getElementById('location').value;return LOC_LAPS[loc]!=null?LOC_LAPS[loc]:DEFAULT_M;}
+function refreshDisplay(){const u=document.getElementById('unit').value,m=currentMeters();document.getElementById('lapVal').value=u==='mi'?+(m/M_PER_MILE).toFixed(4):Math.round(m);}
+function locationChanged(){refreshDisplay();document.getElementById('savedNote').textContent='';}
+function unitChanged(){refreshDisplay();}
+function saveDistance(){
+  const u=document.getElementById('unit').value,val=Number(document.getElementById('lapVal').value);
+  if(!val||val<=0)return;
+  const meters=u==='mi'?val*M_PER_MILE:val, loc=document.getElementById('location').value;
+  LOC_LAPS[loc]=meters;
+  fetch(EXEC_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify({action:'setLocationLaps',token:TOKEN,location:loc,meters:meters})})
+    .then(r=>r.text()).then(t=>{try{const r=JSON.parse(t);if(r.ok){LOC_LAPS=r.locationLaps;document.getElementById('savedNote').textContent='✓ Saved '+loc+' distance';}}catch(e){}});
+}
+
+let lastCode='',lastTime=0;
+function onScan(txt){const now=Date.now();if(txt===lastCode&&now-lastTime<2500)return;lastCode=txt;lastTime=now;send(txt.trim());}
+function onScanError(){}
+function send(id){
+  fetch(EXEC_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify({token:TOKEN,studentId:id,location:document.getElementById('location').value,lapLengthM:currentMeters(),deviceLabel:'Camera'})})
+  .then(r=>r.text()).then(text=>{let r;try{r=JSON.parse(text);}catch(e){setFeedback('err','Server error','Try again');beep('err');return;}showResult(r);})
+  .catch(e=>{setFeedback('err','Network error',String(e));beep('err');});
+}
+function showResult(r){
+  if(r.ok){setFeedback('ok','✔ '+r.name,'Gr '+r.grade+' · '+r.todayLaps+' laps today');beep('ok');}
+  else if(r.cooldown){setFeedback('warn',r.name||'Wait',r.msg);beep('warn');}
+  else{setFeedback('err','✖ '+r.msg);beep('err');}
+}
+function setFeedback(cls,main,sub){
+  const f=document.getElementById('feedback');f.className=cls;
+  f.innerHTML=main+(sub?'<div class="sub">'+sub+'</div>':'');
+  if(cls&&navigator.vibrate)navigator.vibrate(cls==='ok'?60:150);
+  if(cls)setTimeout(()=>{f.className='';f.textContent='Ready to scan';},2600);
+}
+
 async function toggleCam(){
   ensureAudio();
   const btn=document.getElementById('camBtn');
@@ -10,7 +134,7 @@ async function toggleCam(){
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
   } catch (e1) {
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: true }); // any camera
+      stream = await navigator.mediaDevices.getUserMedia({ video: true });
     } catch (e2) {
       setFeedback('err','Camera: '+e2.name, e2.name==='NotFoundError'?'No camera detected on this device.':e2.message);
       return;
@@ -19,7 +143,6 @@ async function toggleCam(){
   stream.getTracks().forEach(t=>t.stop());
 
   scanner=scanner||new Html5Qrcode('reader');
-  // Pick a camera from the list; prefer one labeled "back", else the first
   Html5Qrcode.getCameras().then(cams=>{
     if(!cams||!cams.length){setFeedback('err','No camera found','This device has no usable camera.');return;}
     const back=cams.find(c=>/back|rear|environment/i.test(c.label));
@@ -29,3 +152,6 @@ async function toggleCam(){
       .catch(e=>setFeedback('err','Camera start failed',String(e)));
   }).catch(e=>setFeedback('err','Camera list failed',String(e)));
 }
+</script>
+</body>
+</html>
