@@ -54,10 +54,15 @@
 
 <script src="https://unpkg.com/html5-qrcode"></script>
 <script>
-// ====== YOUR SETTINGS ======
-const EXEC_URL = 'https://script.google.com/macros/s/AKfycbyjMF7jZ7tc8d77Q7_SsP7clwpZXJ6t41Qw6UIDE5RU_5OJFStP82tj-Ydzxpb_8f0xeA/exec';
-const TOKEN    = 'f362693a';
-// ===========================
+// ====== FALLBACK SETTINGS (used only if not passed in the URL) ======
+const FALLBACK_EXEC  = 'https://script.google.com/macros/s/AKfycbyjMF7jZ7tc8d77Q7_SsP7clwpZXJ6t41Qw6UIDE5RU_5OJFStP82tj-Ydzxpb_8f0xeA/exec';
+const FALLBACK_TOKEN = 'f362693a';
+// ===================================================================
+
+// Read exec + token from the URL (?exec=...&token=...), else use fallback.
+const params = new URLSearchParams(window.location.search);
+const EXEC_URL = params.get('exec') || FALLBACK_EXEC;
+const TOKEN    = params.get('token') || FALLBACK_TOKEN;
 
 const M_PER_MILE = 1609.344;
 let scanner=null, camOn=false, LOC_LAPS={}, DEFAULT_M=400, MAIN_URL='';
